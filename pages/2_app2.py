@@ -1,101 +1,116 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+# Importamos el DataFrame cargado y limpio desde el loader
+from inicio import df_diagnosticos as df 
 
-st.set_page_config(page_icon="🩺", layout="wide")
+st.set_page_config(page_title="📊 Análisis Diagnósticos CIE-10", layout="wide")
 
-# == Carga de datos ==
-archivo_csv = 'dataframe/enfermedades.csv'  # Cambia al nombre real de tu archivo
-try:
-    df = pd.read_csv(archivo_csv, encoding='utf-8')
-except FileNotFoundError:
-    st.error(f"No se encontró el archivo '{archivo_csv}' en la carpeta actual.")
+# ----------------------------------------------------------------------
+# --- DASHBOARD PRINCIPAL ---
+# ----------------------------------------------------------------------
+
+# Definición de nombres de columnas para evitar errores de tipeo
+COL_AÑO = "AÑO REPORTADO"
+COL_UNIDAD = "UNIDAD FUNCIONAL"
+COL_DIAGNOSTICO = "NOMBRE DEL DIAGNOSTICO"
+COL_EDAD = "EDAD DE ATENCION (AÑOS)"
+
+
+# Verificación crítica de datos
+if df.empty or COL_AÑO not in df.columns or COL_UNIDAD not in df.columns or COL_DIAGNOSTICO not in df.columns:
+    st.error("No se pudieron cargar los datos o faltan columnas clave (AÑO REPORTADO, UNIDAD FUNCIONAL, NOMBRE DEL DIAGNOSTICO).")
     st.stop()
 
-# == Limpieza de columnas ==
-df.columns = [col.strip().upper() for col in df.columns]
-df = df.rename(columns={
-    'CIDIGO CIE-10': 'CIE10',
-    'NOMBRE DEL DIAGNOSTICO': 'DIAGNOSTICO',
-    'UNIDAD FUNCIONAL': 'UNIDAD',
-    'DESTINO AL EGRESO': 'DESTINO',
-    'EDAD DE ATENCION (AÑOS)': 'EDAD',
-    'AÑO REPORTADO': 'ANIO'
-})
 
-# == Conversión de datos ==
-df['EDAD'] = pd.to_numeric(df['EDAD'], errors='coerce')
-df['ANIO'] = df['ANIO'].astype(str).str.replace(',', '').astype(int)
+st.title("📈 Dashboard de Diagnósticos CIE-10")
+st.markdown("Análisis interactivo de atenciones por diagnóstico, edad y unidad funcional.")
 
-# == Sidebar de filtros ==
-st.sidebar.title("🔎 Filtros de Enfermedades")
-anios = sorted(df['ANIO'].unique())
-anio_sel = st.sidebar.multiselect('Año reportado:', options=anios, default=anios)
-unidad_sel = st.sidebar.multiselect('Unidad funcional:', options=sorted(df['UNIDAD'].unique()), default=sorted(df['UNIDAD'].unique()))
-destino_sel = st.sidebar.multiselect('Destino al egreso:', options=sorted(df['DESTINO'].unique()), default=sorted(df['DESTINO'].unique()))
-diagnostico_buscar = st.sidebar.text_input("Buscar diagnóstico (palabra clave):")
-edad_min, edad_max = int(df['EDAD'].min()), int(df['EDAD'].max())
-rango_edad = st.sidebar.slider('Rango de edad:', min_value=edad_min, max_value=edad_max, value=(edad_min, edad_max))
+# --- Filtros ---
+col1, col2 = st.columns(2)
 
-# == Aplicar filtros ==
-df_filtrado = df[
-    df['ANIO'].isin(anio_sel) &
-    df['UNIDAD'].isin(unidad_sel) &
-    df['DESTINO'].isin(destino_sel) &
-    df['EDAD'].between(rango_edad[0], rango_edad[1])
-]
+with col1:
+    # Aseguramos que los valores sean únicos antes de ordenar
+    años_unicos = sorted(df[COL_AÑO].dropna().unique())
+    # Usamos session_state para mantener el valor del filtro entre ejecuciones
+    if 'año_sel_app2' not in st.session_state:
+        st.session_state.año_sel_app2 = años_unicos[0] if años_unicos else None
+    
+    año_sel = st.selectbox("Selecciona el año:", años_unicos, key='año_sel_app2')
 
-if diagnostico_buscar:
-    df_filtrado = df_filtrado[
-        df_filtrado['DIAGNOSTICO'].str.contains(diagnostico_buscar, case=False, na=False) |
-        df_filtrado['CIE10'].str.contains(diagnostico_buscar, case=False, na=False)
-    ]
+with col2:
+    unidades_unicas = sorted(df[COL_UNIDAD].dropna().unique().tolist())
+    if 'unidad_sel_app2' not in st.session_state:
+        st.session_state.unidad_sel_app2 = "Todos"
+    
+    unidad_sel = st.selectbox("Selecciona unidad funcional:", ["Todos"] + unidades_unicas, key='unidad_sel_app2')
 
-# == Título y datos ==
-st.markdown("""
-<div style="background: linear-gradient(90deg, #155799, #159957); 
-            padding:10px; border-radius:10px; text-align:center;">
-    <h1 style="color:white;">🩺 Dashboard de Enfermedades (Diagnósticos)</h1>
-</div>
-""", unsafe_allow_html=True)
+# --- Filtrar datos ---
+df_filtrado = df[df[COL_AÑO] == año_sel]
+if unidad_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado[COL_UNIDAD] == unidad_sel]
 
-st.markdown(f"**Total registros filtrados:** {len(df_filtrado)}")
+# 4. Guardar el DataFrame filtrado para la Página 3 (Gemini)
+st.session_state['df_filtrado_app2'] = df_filtrado.copy()
 
-st.markdown("<h2 style='text-align:center;'>📋 Datos Filtrados</h2>", unsafe_allow_html=True)
-st.dataframe(df_filtrado[['CIE10', 'DIAGNOSTICO', 'UNIDAD', 'DESTINO', 'EDAD', 'ANIO']], use_container_width=True)
 
-if not df_filtrado.empty:
-    st.divider()
-    st.markdown("<h2 style='text-align:center;'>📈 Visualizaciones</h2>", unsafe_allow_html=True)
+# ----------------------------------------------------------------------
+# --- KPIs (4 Estadísticas) ---
+# ----------------------------------------------------------------------
+col1, col2, col3, col4 = st.columns(4)
 
-    col1, col2 = st.columns(2)
+total_registros = len(df_filtrado)
+diagnosticos_unicos = df_filtrado[COL_DIAGNOSTICO].nunique()
+unidades_funcionales_unicas = df_filtrado[COL_UNIDAD].nunique()
 
-    # Diagnósticos más frecuentes
-    top_diag = df_filtrado['DIAGNOSTICO'].value_counts().nlargest(10).reset_index()
-    top_diag.columns = ['DIAGNOSTICO', 'REGISTROS']
-    fig1 = px.bar(top_diag, x='DIAGNOSTICO', y='REGISTROS', title="Top 10 Diagnósticos", labels={'REGISTROS':'Nº de casos'})
-    col1.plotly_chart(fig1, use_container_width=True)
-
-    # Distribución por unidad funcional
-    unidad_counts = df_filtrado['UNIDAD'].value_counts().reset_index()
-    unidad_counts.columns = ['UNIDAD', 'REGISTROS']
-    fig2 = px.bar(unidad_counts, x='UNIDAD', y='REGISTROS', title="Distribución por Unidad Funcional", labels={'REGISTROS':'Nº de casos'})
-    col2.plotly_chart(fig2, use_container_width=True)
-
-    # Distribución por destino
-    destino_counts = df_filtrado['DESTINO'].value_counts().reset_index()
-    destino_counts.columns = ['DESTINO', 'REGISTROS']
-    fig3 = px.pie(destino_counts, names='DESTINO', values='REGISTROS', title="Destino al egreso", hole=0.3)
-    col1.plotly_chart(fig3, use_container_width=True)
-
-    # Histograma de edad
-    fig4 = px.histogram(df_filtrado, x='EDAD', nbins=20, title="Distribución de edades", labels={'EDAD':'Edad'})
-    col2.plotly_chart(fig4, use_container_width=True)
-
-    # Tendencia anual
-    st.divider()
-    tendencia = df_filtrado.groupby('ANIO').size().reset_index(name='CASOS')
-    fig5 = px.line(tendencia, x='ANIO', y='CASOS', title="Casos por Año reportado", markers=True, labels={'ANIO':'Año', 'CASOS':'Nº de casos'})
-    st.plotly_chart(fig5, use_container_width=True)
+# Nueva Estadística: Promedio de Edad
+if COL_EDAD in df_filtrado.columns:
+    promedio_edad = df_filtrado[COL_EDAD].mean()
+    promedio_edad_str = f"{promedio_edad:.1f}" if pd.notna(promedio_edad) else "N/A"
 else:
-    st.warning("No hay datos que cumplan con los filtros seleccionados.")
+    promedio_edad_str = "N/A"
+
+
+col1.metric("🧾 Total registros", total_registros)
+col2.metric("💉 Diagnósticos únicos", diagnosticos_unicos)
+col3.metric("🏥 Unidades funcionales", unidades_funcionales_unicas)
+col4.metric("👶 Edad Promedio", promedio_edad_str, help="Promedio de edad de los pacientes atendidos (en años).") # Nuevo KPI aquí
+
+st.divider()
+
+# ----------------------------------------------------------------------
+# --- Gráficos ---
+# ----------------------------------------------------------------------
+col1, col2 = st.columns(2)
+
+# Gráfico 1: Frecuencia de diagnósticos
+top_diag = df_filtrado[COL_DIAGNOSTICO].value_counts().nlargest(10)
+fig1 = px.bar(
+    top_diag,
+    x=top_diag.values,
+    y=top_diag.index,
+    orientation="h",
+    labels={"x": "Casos", "y": "Diagnóstico"},
+    title="🔹 Top 10 diagnósticos más frecuentes",
+)
+col1.plotly_chart(fig1, use_container_width=True)
+
+# Gráfico 2: Promedio de edad por diagnóstico
+if COL_EDAD in df_filtrado.columns:
+    edad_prom = df_filtrado.groupby(COL_DIAGNOSTICO)[COL_EDAD].mean().nlargest(10)
+    fig2 = px.bar(
+        edad_prom,
+        x=edad_prom.values,
+        y=edad_prom.index,
+        orientation="h",
+        labels={"x": "Edad promedio", "y": "Diagnóstico"},
+        title="🔹 Edad promedio de atención (Top 10 diagnósticos)",
+    )
+    col2.plotly_chart(fig2, use_container_width=True)
+else:
+     col2.info(f"Columna '{COL_EDAD}' no encontrada o con datos nulos para el Gráfico 2.")
+
+
+# --- Tabla de detalle ---
+st.subheader("📋 Datos detallados")
+st.dataframe(df_filtrado, use_container_width=True)
